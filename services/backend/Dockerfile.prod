@@ -1,0 +1,81 @@
+# Author: Vincent Brandon
+
+
+## Build stage ##
+FROM python:3.11-bullseye
+
+# Set environment variables
+ENV WORKDIR=/bin/openassistant/app
+ENV YARA_VERSION=4.2.3
+ENV ENV=production
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+
+# Create working directory
+RUN mkdir -p $WORKDIR
+
+# Create yara user
+RUN useradd -m yara
+RUN chown -R yara:yara $WORKDIR
+
+# Set working directory
+WORKDIR $WORKDIR
+
+
+## Package Installs ##
+# Update system and install dependencies
+RUN apt clean @@ apt autoclean
+RUN apt-get update && apt-get upgrade -y
+RUN apt-get install curl pip -y
+RUN apt-get install automake libtool make gcc pkg-config -y
+RUN apt-get install flex bison -y
+
+## Make Installs ##
+# Download Jansson
+RUN curl -L https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz -o jansson-2.14.tar.gz
+RUN tar -zxf jansson-2.14.tar.gz
+RUN cd jansson-2.14 && \
+    ./configure && \
+    make && \
+    make install && \
+    # make check && \
+    autoreconf -i && \
+    cd ..
+
+# Download yara
+RUN curl -L https://github.com/VirusTotal/yara/archive/refs/tags/v4.2.3.tar.gz -o yara-${YARA_VERSION}.tar.gz
+RUN tar -zxf yara-${YARA_VERSION}.tar.gz
+RUN cd yara-${YARA_VERSION} && \
+    ./bootstrap.sh && \
+    ./configure --enable-cuckoo --enable-dotnet && \
+    make && \
+    make install
+    # make check
+
+# Fix broken symlinks?
+RUN echo "usr/local/lib" >> /etc/ld.so.conf.d/libc.conf
+RUN ldconfig
+
+
+## Set Up Backend App ##
+# Copy backend app
+COPY requirements.txt .
+
+# install dependencies
+RUN set -eux \
+    && pip install --upgrade pip setuptools wheel \
+    && pip install -r ${WORKDIR}/requirements.txt \
+    && pip install --global-option="build" --global-option="--enable-cuckoo" --global-option="--enable-magic" yara-python \
+    && rm -rf /root/.cache/pip
+
+# copy project
+COPY . ${WORKDIR}
+
+
+# Change to app user
+USER yara
+
+## Set up entrypoint ##
+CMD ["/bin/bash"]
